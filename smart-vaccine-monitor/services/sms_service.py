@@ -1,4 +1,4 @@
-"""SMS alert service using Fast2SMS REST API."""
+"""SMS alert service — supports Twilio and Fast2SMS."""
 
 import httpx
 from config.settings import settings
@@ -6,46 +6,113 @@ from utils.logger import setup_logger
 
 logger = setup_logger("vaccine_monitor.sms_service")
 
-FAST2SMS_URL = "https://www.fast2sms.com/dev/bulkV2"
-
 
 async def send_sms_alert(
     status: str,
     risk_score: float,
     temp_internal: float,
     eta_to_critical: int | None = None,
+    potency_percent: float = 100.0,
 ) -> bool:
-    """Send an SMS alert via Fast2SMS API.
+    """Send an SMS alert via configured provider (Twilio or Fast2SMS).
 
     Args:
         status: Current status (SAFE, WARNING, CRITICAL).
         risk_score: Current risk score (0-100).
         temp_internal: Current internal temperature.
         eta_to_critical: Minutes until CRITICAL, or None.
+        potency_percent: Current vaccine potency percentage.
 
     Returns:
         True if SMS was sent successfully, False otherwise.
     """
-    if settings.FAST2SMS_API_KEY == "your_key_here":
-        logger.warning("Fast2SMS API key not configured — SMS alert skipped (logged only)")
-        logger.info(
-            f"[SMS WOULD SEND] ALERT: Vaccine storage {status}. "
-            f"Risk: {risk_score}/100. Temp: {temp_internal}°C."
-        )
-        return False
-
     eta_message = ""
     if eta_to_critical is not None:
-        eta_message = f"ETA to CRITICAL: {eta_to_critical} min."
+        eta_message = f" ETA to CRITICAL: {eta_to_critical} min."
     elif status == "CRITICAL":
-        eta_message = "Status is CRITICAL NOW."
+        eta_message = " Status is CRITICAL NOW."
 
     message = (
-        f"ALERT: Vaccine storage {status}. "
-        f"Risk: {risk_score}/100. "
-        f"Temp: {temp_internal}°C. "
-        f"{eta_message}"
+        f"CRITICAL ALERT: Temp {temp_internal}°C, "
+        f"Risk {risk_score}%, "
+        f"Potency {potency_percent:.1f}%. "
+        f"Immediate action required.{eta_message} "
+        f"PDF incident report generated — check dashboard."
     )
+
+    provider = settings.SMS_PROVIDER.lower()
+
+    if provider == "twilio":
+        return await _send_via_twilio(message)
+    elif provider == "fast2sms":
+        return await _send_via_fast2sms(message)
+    else:
+        logger.warning(f"Unknown SMS provider: {provider} — SMS skipped")
+        logger.info(f"[SMS WOULD SEND] {message}")
+        return False
+
+
+async def _send_via_twilio(message: str) -> bool:
+    """Send SMS via Twilio REST API.
+
+    Args:
+        message: The SMS message text.
+
+    Returns:
+        True if sent successfully.
+    """
+    if settings.TWILIO_ACCOUNT_SID == "your_sid_here":
+        logger.warning("Twilio not configured — SMS alert skipped (logged only)")
+        logger.info(f"[SMS WOULD SEND] {message}")
+        return False
+
+    url = (
+        f"https://api.twilio.com/2010-04-01/Accounts/"
+        f"{settings.TWILIO_ACCOUNT_SID}/Messages.json"
+    )
+
+    payload = {
+        "To": settings.TWILIO_TO_NUMBER,
+        "From": settings.TWILIO_FROM_NUMBER,
+        "Body": message,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(
+                url,
+                data=payload,
+                auth=(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN),
+            )
+            response.raise_for_status()
+            result = response.json()
+            sid = result.get("sid", "unknown")
+            logger.info(f"✅ Twilio SMS sent successfully! SID: {sid} → {settings.TWILIO_TO_NUMBER}")
+            return True
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Twilio API error: {e.response.status_code} — {e.response.text[:200]}")
+        return False
+    except httpx.RequestError as e:
+        logger.error(f"Twilio request failed: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected Twilio SMS error: {e}")
+        return False
+
+
+async def _send_via_fast2sms(message: str) -> bool:
+    """Send SMS via Fast2SMS REST API.
+
+    Args:
+        message: The SMS message text.
+
+    Returns:
+        True if sent successfully.
+    """
+    if settings.FAST2SMS_API_KEY == "your_key_here":
+        logger.warning("Fast2SMS API key not configured — SMS alert skipped (logged only)")
+        logger.info(f"[SMS WOULD SEND] {message}")
+        return False
 
     headers = {
         "authorization": settings.FAST2SMS_API_KEY,
@@ -61,17 +128,21 @@ async def send_sms_alert(
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(FAST2SMS_URL, json=payload, headers=headers)
+            response = await client.post(
+                "https://www.fast2sms.com/dev/bulkV2",
+                json=payload,
+                headers=headers,
+            )
             response.raise_for_status()
             result = response.json()
-            logger.info(f"SMS sent successfully: {result}")
+            logger.info(f"✅ Fast2SMS sent successfully: {result}")
             return True
     except httpx.HTTPStatusError as e:
-        logger.error(f"Fast2SMS API error: {e.response.status_code} — {e.response.text}")
+        logger.error(f"Fast2SMS API error: {e.response.status_code} — {e.response.text[:200]}")
         return False
     except httpx.RequestError as e:
         logger.error(f"Fast2SMS request failed: {e}")
         return False
     except Exception as e:
-        logger.error(f"Unexpected SMS error: {e}")
+        logger.error(f"Unexpected Fast2SMS error: {e}")
         return False

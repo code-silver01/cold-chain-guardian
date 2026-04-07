@@ -55,6 +55,7 @@ async def lifespan(app: FastAPI):
         logger.error(f"ML model initialization error: {e}")
 
     # Step 3: Start data source
+    _actual_mode = "SIMULATION"
     if settings.SIMULATION_MODE:
         logger.info("Starting in SIMULATION MODE")
         from mqtt.simulator import run_simulator
@@ -62,19 +63,24 @@ async def lifespan(app: FastAPI):
         _background_tasks.append(task)
         logger.info(f"CSV simulator started: {settings.SIMULATION_CSV_PATH}")
     else:
-        logger.info("Starting in LIVE MODE")
+        logger.info("Starting in LIVE MODE — connecting to MQTT broker...")
         try:
             from mqtt.subscriber import start_mqtt_subscriber, set_event_loop
             loop = asyncio.get_running_loop()
             set_event_loop(loop)
             _mqtt_client = start_mqtt_subscriber()
-            logger.info(f"MQTT subscriber connected to {settings.MQTT_BROKER_HOST}:{settings.MQTT_BROKER_PORT}")
+            _actual_mode = "LIVE"
+            logger.info(f"✅ MQTT subscriber connected to {settings.MQTT_BROKER_HOST}:{settings.MQTT_BROKER_PORT}")
         except Exception as e:
-            logger.error(f"Failed to start MQTT subscriber: {e}")
-            logger.warning("System running without MQTT — use /api/simulate/trigger for manual data input")
+            logger.error(f"❌ Failed to start MQTT subscriber: {e}")
+            logger.warning("⚠ Auto-falling back to SIMULATION MODE for demo reliability...")
+            from mqtt.simulator import run_simulator
+            task = asyncio.create_task(run_simulator())
+            _background_tasks.append(task)
+            logger.info(f"Fallback CSV simulator started: {settings.SIMULATION_CSV_PATH}")
 
     # Step 4: Log config summary
-    mode = "SIMULATION" if settings.SIMULATION_MODE else "LIVE"
+    mode = _actual_mode
     logger.info(f"System ready. Mode: {mode}. DB: {settings.DATABASE_URL}")
     logger.info(f"Dashboard available at http://localhost:8000")
     logger.info(f"Safe temp range: {settings.SAFE_TEMP_MIN}°C – {settings.SAFE_TEMP_MAX}°C")

@@ -27,6 +27,7 @@ class TriggerEngine:
         """Initialize with no previous status."""
         self._previous_status: Optional[str] = None
         self._latest_report: Optional[str] = None
+        self._latest_pdf_path: Optional[str] = None
 
     async def evaluate(self, reading: ProcessedReading) -> None:
         """Evaluate a processed reading for status changes.
@@ -70,16 +71,18 @@ class TriggerEngine:
                 self._fire_report(reading, previous_status, current_status, incident.id)
             )
 
-            # Wait for report before PDF (PDF needs report text)
-            await sms_task
+            # Wait for SMS and report concurrently
+            sms_result = await sms_task
             report_text = await report_task
 
-            # Generate PDF with report text (DISABLED BY USER REQUEST)
-            # pdf_task = asyncio.create_task(
-            #     self._fire_pdf(reading, incident.id, report_text)
-            # )
-            # pdf_path = await pdf_task
-            pdf_path = None # Set to None since PDF generation is disabled
+            # Generate PDF with report text
+            pdf_task = asyncio.create_task(
+                self._fire_pdf(reading, incident.id, report_text)
+            )
+            pdf_path = await pdf_task
+
+            # Store latest PDF path for dashboard access
+            self._latest_pdf_path = pdf_path
 
             # Update incident with report and PDF path
             await update_incident(
@@ -88,7 +91,27 @@ class TriggerEngine:
                 pdf_path=pdf_path,
             )
 
-            logger.info(f"All trigger actions completed for incident {incident.id}")
+            # Broadcast trigger event to dashboard via WebSocket
+            try:
+                from api.websocket_manager import ws_manager
+                await ws_manager.broadcast({
+                    "_trigger_event": True,
+                    "type": "status_change",
+                    "from": previous_status,
+                    "to": current_status,
+                    "incident_id": incident.id,
+                    "sms_sent": sms_result,
+                    "pdf_generated": pdf_path is not None,
+                    "pdf_path": pdf_path,
+                })
+            except Exception:
+                pass  # WebSocket broadcast is best-effort
+
+            logger.info(
+                f"All trigger actions completed for incident {incident.id} | "
+                f"SMS={'✅' if sms_result else '❌'} | "
+                f"PDF={'✅ ' + (pdf_path or '') if pdf_path else '❌'}"
+            )
 
         except Exception as e:
             logger.error(f"Trigger engine error: {e}")
@@ -108,6 +131,7 @@ class TriggerEngine:
                 risk_score=reading.risk_score,
                 temp_internal=reading.temp_internal,
                 eta_to_critical=reading.eta_to_critical,
+                potency_percent=reading.potency_percent,
             )
             return result
         except Exception as e:
@@ -189,6 +213,11 @@ class TriggerEngine:
     def previous_status(self) -> Optional[str]:
         """Get the previous status."""
         return self._previous_status
+
+    @property
+    def latest_pdf_path(self) -> Optional[str]:
+        """Get the most recently generated PDF path."""
+        return self._latest_pdf_path
 
 
 # Global singleton instance

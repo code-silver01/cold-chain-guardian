@@ -1,4 +1,16 @@
-"""Processing pipeline — orchestrates all processing stages per reading."""
+"""Processing pipeline — orchestrates all processing stages per reading.
+
+Uses Avishkar pre-trained models for:
+  - Anomaly detection (IsolationForest)
+  - Breach prediction (RandomForestClassifier)  → ETA to CRITICAL
+  - Potency estimation (LinearRegression)
+
+Plus existing physics modules for:
+  - Rolling baseline temperature statistics
+  - VVM Arrhenius damage model (secondary signal)
+  - Exposure time tracking
+  - Composite risk scoring
+"""
 
 from datetime import datetime
 from typing import Optional
@@ -7,6 +19,7 @@ from processing.baseline import baseline_learner
 from processing.exposure import exposure_tracker
 from processing.vvm import vvm_model
 from processing.risk_engine import compute_risk_score
+from ml.avishkar_adapter import avishkar
 from ml.anomaly_detector import anomaly_detector
 from ml.prediction_model import prediction_model, get_temp_trend
 from utils.logger import setup_logger
@@ -19,11 +32,13 @@ async def process_reading(sensor_data: SensorDataInput) -> ProcessedReading:
 
     Pipeline stages:
       1. Update rolling baseline temperature statistics
-      2. Run anomaly detection via IsolationForest
-      3. Update exposure tracker (time outside safe range)
-      4. Update VVM damage model (Arrhenius equation)
-      5. Compute composite risk score and status
-      6. Predict ETA to CRITICAL status
+      2. Update Avishkar adapter state (temp_delta, unsafe_mins, damage)
+      3. Run anomaly detection via Avishkar IsolationForest
+      4. Update exposure tracker (time outside safe range)
+      5. Update VVM damage model (Arrhenius — secondary signal)
+      6. Compute composite risk score and status
+      7. Predict potency via Avishkar LinearRegression
+      8. Predict ETA to CRITICAL via Avishkar RandomForest
 
     Args:
         sensor_data: Validated sensor data input.
@@ -45,24 +60,30 @@ async def process_reading(sensor_data: SensorDataInput) -> ProcessedReading:
     baseline_learner.update(temp_internal)
     baseline_mean = baseline_learner.mean
     baseline_std = baseline_learner.std
-    deviation = baseline_learner.deviation
 
-    # Stage 2: Anomaly detection
+    # Stage 2: Update Avishkar adapter state
+    #   Computes temp_delta, unsafe_mins (with reset), damage (Avishkar formula)
+    avishkar.update_state(temp_internal)
+    temp_delta = avishkar.temp_delta
+    av_unsafe_mins = avishkar.unsafe_mins
+    av_damage = avishkar.damage
+
+    # Stage 3: Anomaly detection (Avishkar IsolationForest)
     is_anomaly = anomaly_detector.predict(
         temp_internal=temp_internal,
-        temp_external=temp_external,
         humidity=humidity,
-        deviation_from_baseline=deviation,
+        temp_delta=temp_delta,
+        unsafe_mins=av_unsafe_mins,
     )
+    anomaly_flag = 1 if is_anomaly else 0
 
-    # Stage 3: Exposure tracking
+    # Stage 4: Exposure tracking (existing module — for risk engine)
     exposure_minutes = exposure_tracker.update(temp_internal)
 
-    # Stage 4: VVM damage (each reading ≈ 1 minute = 1/60 hour)
+    # Stage 5: VVM damage (Arrhenius — secondary physics signal)
     vvm_damage = vvm_model.update(temp_internal, delta_time_hours=1.0 / 60.0)
-    potency_percent = vvm_model.potency_percent
 
-    # Stage 5: Risk score computation
+    # Stage 6: Risk score computation
     risk_score, status = compute_risk_score(
         temp_internal=temp_internal,
         baseline_mean=baseline_mean,
@@ -72,7 +93,14 @@ async def process_reading(sensor_data: SensorDataInput) -> ProcessedReading:
         is_anomaly=is_anomaly,
     )
 
-    # Stage 6: ETA prediction
+    # Stage 7: Potency estimation (Avishkar LinearRegression — primary)
+    potency_percent = prediction_model.predict_potency(
+        damage=av_damage,
+        temp=temp_internal,
+        unsafe_mins=av_unsafe_mins,
+    )
+
+    # Stage 8: ETA prediction (Avishkar RandomForest + heuristic)
     temp_trend = get_temp_trend(temp_internal)
     eta_to_critical: Optional[int] = prediction_model.predict_eta(
         temp_internal=temp_internal,
@@ -80,6 +108,12 @@ async def process_reading(sensor_data: SensorDataInput) -> ProcessedReading:
         vvm_damage=vvm_damage,
         risk_score=risk_score,
         temp_trend_5min=temp_trend,
+        # Avishkar-specific features (keyword-only)
+        humidity=humidity,
+        temp_delta=temp_delta,
+        unsafe_mins=av_unsafe_mins,
+        damage=av_damage,
+        anomaly_flag=anomaly_flag,
     )
 
     processed = ProcessedReading(
@@ -100,7 +134,7 @@ async def process_reading(sensor_data: SensorDataInput) -> ProcessedReading:
         f"Pipeline complete: status={status}, risk={risk_score:.1f}, "
         f"vvm={vvm_damage:.6f}, potency={potency_percent:.1f}%, "
         f"exposure={exposure_minutes}min, anomaly={is_anomaly}, "
-        f"eta={eta_to_critical}"
+        f"eta={eta_to_critical}, av_damage={av_damage:.4f}"
     )
 
     return processed
