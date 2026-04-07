@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Smart Vaccine Cold-Chain Monitoring System — Real-time IoT + AI dashboard for vaccine temperature monitoring, risk assessment, and compliance.">
+    <title>Smart Vaccine Monitor — Cold-Chain Dashboard</title>
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Rajdhani:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+
+    <link rel="stylesheet" href="/frontend/style.css">
+</head>
+<body>
+
+    <!-- Header -->
+    <header id="main-header">
+        <div class="header-left">
+            <div class="logo-icon">
+                <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="40" height="40" rx="10" fill="url(#logo-gradient)"/>
+                    <path d="M20 8L20 20M20 20L14 26M20 20L26 26M16 12H24M14 16H26" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    <circle cx="20" cy="30" r="3" fill="white" opacity="0.8"/>
+                    <defs>
+                        <linearGradient id="logo-gradient" x1="0" y1="0" x2="40" y2="40">
+                            <stop stop-color="#3b82f6"/>
+                            <stop offset="1" stop-color="#6366f1"/>
+                        </linearGradient>
+                    </defs>
+                </svg>
+            </div>
+            <div class="header-title">
+                <h1>Smart Vaccine Monitor</h1>
+                <p class="subtitle">Cold-Chain Surveillance System</p>
+            </div>
+        </div>
+        <div class="header-right">
+            <div id="connection-status" class="connection-badge offline">
+                <span class="pulse-dot"></span>
+                <span id="connection-text">Connecting...</span>
+            </div>
+            <div id="mode-badge" class="mode-badge">
+                <span id="mode-text">SIMULATION</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Dashboard -->
+    <main id="dashboard">
+        <!-- Top Cards Row -->
+        <section class="cards-row">
+            <!-- Temperature Card -->
+            <div class="card temp-card" id="temp-card">
+                <div class="card-header">
+                    <span class="card-icon">🌡️</span>
+                    <span class="card-label">Internal Temperature</span>
+                </div>
+                <div class="card-value">
+                    <span class="value-number" id="temp-value">--</span>
+                    <span class="value-unit">°C</span>
+                </div>
+                <div class="card-footer">
+                    <span class="safe-range">Safe: 2°C – 8°C</span>
+                    <span class="card-ext" id="temp-ext">Ext: --°C</span>
+                </div>
+                <div class="anomaly-indicator" id="anomaly-badge" style="display:none;">
+                    <span>⚠ ANOMALY</span>
+                </div>
+            </div>
+
+            <!-- Risk Score Card -->
+            <div class="card risk-card" id="risk-card">
+                <div class="card-header">
+                    <span class="card-icon">📊</span>
+                    <span class="card-label">Risk Score</span>
+                </div>
+                <div class="risk-gauge-container">
+                    <svg class="risk-gauge" viewBox="0 0 120 80" id="risk-gauge-svg">
+                        <defs>
+                            <linearGradient id="gauge-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                                <stop offset="0%" stop-color="#10b981"/>
+                                <stop offset="50%" stop-color="#f59e0b"/>
+                                <stop offset="100%" stop-color="#ef4444"/>
+                            </linearGradient>
+                        </defs>
+                        <path d="M 15 70 A 45 45 0 0 1 105 70" fill="none" stroke="#1f2937" stroke-width="10" stroke-linecap="round"/>
+                        <path d="M 15 70 A 45 45 0 0 1 105 70" fill="none" stroke="url(#gauge-gradient)" stroke-width="10" stroke-linecap="round" id="gauge-fill" stroke-dasharray="0 142"/>
+                        <text x="60" y="60" text-anchor="middle" class="gauge-value" id="risk-gauge-text">0</text>
+                        <text x="60" y="74" text-anchor="middle" class="gauge-label">/ 100</text>
+                    </svg>
+                </div>
+            </div>
+
+            <!-- Status Badge Card -->
+            <div class="card status-card" id="status-card">
+                <div class="card-header">
+                    <span class="card-icon">🛡️</span>
+                    <span class="card-label">System Status</span>
+                </div>
+                <div class="status-badge-large" id="status-badge">
+                    <span id="status-text">SAFE</span>
+                </div>
+                <div class="card-footer">
+                    <span id="humidity-display">Humidity: --%</span>
+                </div>
+            </div>
+
+            <!-- VVM Damage Card -->
+            <div class="card vvm-card" id="vvm-card">
+                <div class="card-header">
+                    <span class="card-icon">💉</span>
+                    <span class="card-label">VVM Damage</span>
+                </div>
+                <div class="vvm-progress-container">
+                    <div class="vvm-progress-bar">
+                        <div class="vvm-progress-fill" id="vvm-fill" style="width: 0%"></div>
+                    </div>
+                    <div class="vvm-stats">
+                        <span class="vvm-damage-value" id="vvm-damage-text">0.000000</span>
+                        <span class="vvm-potency" id="potency-text">100.0% potency</span>
+                    </div>
+                </div>
+                <div class="card-footer">
+                    <span>Discard threshold: 1.0</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Temperature Chart -->
+        <section class="chart-section">
+            <div class="card chart-card">
+                <div class="card-header">
+                    <span class="card-icon">📈</span>
+                    <span class="card-label">Temperature History (Last 60 Readings)</span>
+                </div>
+                <div class="chart-wrapper">
+                    <canvas id="temp-chart"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- Bottom Row: ETA + Incident Report -->
+        <section class="bottom-row">
+            <!-- ETA Card -->
+            <div class="card eta-card" id="eta-card">
+                <div class="card-header">
+                    <span class="card-icon">⏱️</span>
+                    <span class="card-label">ETA to CRITICAL</span>
+                </div>
+                <div class="eta-display">
+                    <span class="eta-value" id="eta-value">--</span>
+                    <span class="eta-unit" id="eta-unit">min</span>
+                </div>
+                <div class="eta-sub" id="eta-sub">No risk detected</div>
+                <div class="card-footer">
+                    <span id="exposure-display">Exposure: 0 min</span>
+                </div>
+            </div>
+
+            <!-- Incident Report Panel -->
+            <div class="card report-card" id="report-card">
+                <div class="card-header">
+                    <span class="card-icon">📋</span>
+                    <span class="card-label">Incident Report</span>
+                    <button class="refresh-btn" id="refresh-report-btn" title="Refresh Report">↻</button>
+                </div>
+                <div class="report-content" id="report-content">
+                    <p class="report-placeholder">No incident reports generated yet. The system will generate a report when a status change is detected.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Readings Table -->
+        <section class="table-section">
+            <div class="card table-card">
+                <div class="card-header">
+                    <span class="card-icon">📑</span>
+                    <span class="card-label">Recent Readings</span>
+                </div>
+                <div class="table-wrapper">
+                    <table id="readings-table">
+                        <thead>
+                            <tr>
+                                <th>Timestamp</th>
+                                <th>Temp (°C)</th>
+                                <th>Ext Temp (°C)</th>
+                                <th>Humidity (%)</th>
+                                <th>Risk Score</th>
+                                <th>Status</th>
+                                <th>VVM Damage</th>
+                                <th>Anomaly</th>
+                            </tr>
+                        </thead>
+                        <tbody id="readings-tbody">
+                            <tr><td colspan="8" class="empty-table">Waiting for data...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Footer -->
+    <footer>
+        <p>Smart Vaccine Monitoring System v1.0 — IoT + AI Cold-Chain Surveillance</p>
+    </footer>
+
+    <script src="/frontend/dashboard.js"></script>
+</body>
+</html>
