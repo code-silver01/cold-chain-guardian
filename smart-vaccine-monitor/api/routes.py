@@ -1,8 +1,9 @@
 """REST API endpoints and WebSocket handler."""
 
 import os
+import asyncio
 from datetime import datetime
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, BackgroundTasks
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from models.schemas import SensorDataInput, ProcessedReading, SimulateTriggerRequest
 from processing.pipeline import process_reading
@@ -542,3 +543,70 @@ async def api_chat(body: dict):
     }
     return {"response": r[lang]}
 
+
+# ============================================================
+# AVISHKAR ML — MODEL STATUS AND RETRAINING ENDPOINTS
+# ============================================================
+
+@router.get("/api/ml/status")
+async def api_ml_status():
+    """Get the current state of the Avishkar ML adapter.
+
+    Returns live inference state: accumulated damage, unsafe minutes,
+    temperature delta, and whether all 3 models are loaded.
+
+    Returns:
+        JSON with model load status and current inference state variables.
+    """
+    try:
+        from ml.avishkar_adapter import avishkar
+        return {
+            "models_loaded": {
+                "anomaly_model": avishkar.anomaly_model is not None,
+                "predictor_model": avishkar.predictor_model is not None,
+                "potency_model": avishkar.potency_model is not None,
+            },
+            "inference_state": {
+                "damage": avishkar.damage,
+                "unsafe_mins": avishkar.unsafe_mins,
+                "temp_delta": avishkar.temp_delta,
+            },
+        }
+    except Exception as e:
+        logger.error(f"ML status check failed: {e}")
+        return JSONResponse(status_code=500, content={"detail": str(e)})
+
+
+@router.post("/api/ml/retrain")
+async def api_ml_retrain(background_tasks: BackgroundTasks):
+    """Trigger asynchronous retraining of all 3 Avishkar models.
+
+    Generates fresh synthetic cold-chain data and retrains:
+      - Model 1: IsolationForest anomaly detector
+      - Model 2: RandomForest breach predictor
+      - Model 3: LinearRegression potency estimator
+
+    Models are saved to 'Avishkar models/*.pkl'. Restart the server
+    (or wait for next hot-reload) to load the new models.
+
+    Returns:
+        JSON with accepted status and expected output paths.
+    """
+    def _run_training():
+        try:
+            from ml.trainer import train_all
+            train_all()
+        except Exception as e:
+            logger.error(f"Background model retraining failed: {e}")
+
+    background_tasks.add_task(_run_training)
+    logger.info("Model retraining task queued in background")
+    return {
+        "status": "accepted",
+        "message": "Retraining all 3 Avishkar models in background. Check server logs for progress.",
+        "output_paths": {
+            "anomaly_model": "Avishkar models/anomaly_model.pkl",
+            "predictor_model": "Avishkar models/predictor_model.pkl",
+            "potency_model": "Avishkar models/potency_model.pkl",
+        },
+    }
